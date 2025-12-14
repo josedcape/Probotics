@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PROBOTICS | Advanced Neural Interface</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Orbitron:wght@400;500;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              display: ['Orbitron', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+            },
+            colors: {
+              void: '#030508',
+              space: {
+                dark: '#050a14',
+                light: '#0a1428',
+              },
+              neon: {
+                cyan: '#00f3ff',
+                pink: '#ff00ff',
+                purple: '#bc13fe',
+                blue: '#0066ff'
+              }
+            },
+            animation: {
+              'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'glow': 'glow 3s ease-in-out infinite alternate',
+              'scan': 'scan 4s linear infinite',
+              'float': 'float 6s ease-in-out infinite',
+              'laser-sweep': 'laserSweep 2s linear infinite',
+            },
+            keyframes: {
+              glow: {
+                '0%': { boxShadow: '0 0 5px rgba(0, 243, 255, 0.2), inset 0 0 5px rgba(0, 243, 255, 0.1)' },
+                '100%': { boxShadow: '0 0 20px rgba(0, 243, 255, 0.4), inset 0 0 10px rgba(0, 243, 255, 0.2)' }
+              },
+              scan: {
+                '0%': { transform: 'translateY(-100%)', opacity: '0' },
+                '50%': { opacity: '1' },
+                '100%': { transform: 'translateY(100%)', opacity: '0' }
+              },
+              float: {
+                '0%, 100%': { transform: 'translateY(0)' },
+                '50%': { transform: 'translateY(-10px)' }
+              },
+              laserSweep: {
+                '0%': { backgroundPosition: '-200% 0' },
+                '100%': { backgroundPosition: '200% 0' }
+              }
+            }
+          },
+        },
+      }
+    </script>
+    <style>
+      body {
+        background-color: #030508;
+        color: #e0e0e0;
+        overflow: hidden;
+      }
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #050a14;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #0a1428;
+        border: 1px solid #00f3ff40;
+        border-radius: 0px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #00f3ff;
+      }
+
+      /* Cyber Glass Style */
+      .cyber-glass {
+        background: rgba(5, 10, 20, 0.75);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(0, 243, 255, 0.1);
+        box-shadow: 
+          0 4px 30px rgba(0, 0, 0, 0.5),
+          inset 0 0 20px rgba(0, 243, 255, 0.05);
+      }
+      
+      .cyber-glass-strong {
+        background: rgba(2, 6, 12, 0.85);
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(0, 243, 255, 0.15);
+        border-top: 1px solid rgba(0, 243, 255, 0.3);
+        box-shadow: 0 10px 40px -10px rgba(0, 243, 255, 0.1);
+      }
+
+      /* --- NEW: Violet Snake Border Animation (Rectangular/Avatar) --- */
+      .snake-border-container {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 25;
+      }
+      .snake-border-container span {
+        position: absolute;
+        display: block;
+      }
+      /* Top */
+      .snake-border-container span:nth-child(1) {
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, #bc13fe);
+        animation: btn-anim1 5s linear infinite;
+      }
+      /* Right */
+      .snake-border-container span:nth-child(2) {
+        top: -100%;
+        right: 0;
+        width: 2px;
+        height: 100%;
+        background: linear-gradient(180deg, transparent, #bc13fe);
+        animation: btn-anim2 5s linear infinite;
+        animation-delay: 1.25s;
+      }
+      /* Bottom */
+      .snake-border-container span:nth-child(3) {
+        bottom: 0;
+        right: -100%;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(270deg, transparent, #bc13fe);
+        animation: btn-anim3 5s linear infinite;
+        animation-delay: 2.5s;
+      }
+      /* Left */
+      .snake-border-container span:nth-child(4) {
+        bottom: -100%;
+        left: 0;
+        width: 2px;
+        height: 100%;
+        background: linear-gradient(360deg, transparent, #bc13fe);
+        animation: btn-anim4 5s linear infinite;
+        animation-delay: 3.75s;
+      }
+
+      @keyframes btn-anim1 {
+        0% { left: -100%; }
+        15%, 100% { left: 100%; }
+      }
+      @keyframes btn-anim2 {
+        0% { top: -100%; }
+        15%, 100% { top: 100%; }
+      }
+      @keyframes btn-anim3 {
+        0% { right: -100%; }
+        15%, 100% { right: 100%; }
+      }
+      @keyframes btn-anim4 {
+        0% { bottom: -100%; }
+        15%, 100% { bottom: 100%; }
+      }
+
+      /* --- NEW: Rotating Laser Border for Rounded Input --- */
+      .laser-input-wrapper {
+        position: relative;
+        border-radius: 20px; /* Outer Radius */
+        padding: 2px; /* Thickness of the laser beam */
+        background: #050a14;
+        overflow: hidden;
+        box-shadow: 0 0 15px rgba(188, 19, 254, 0.2);
+      }
+
+      /* The Rotating Beam */
+      .laser-input-wrapper::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: conic-gradient(
+          transparent 0deg, 
+          transparent 60deg,
+          #bc13fe 100deg, 
+          transparent 140deg,
+          transparent 180deg,
+          transparent 240deg,
+          #bc13fe 280deg,     /* Segundo haz (opcional para simetría) */
+          transparent 320deg
+        );
+        animation: rotate-border 4s linear infinite;
+        z-index: 0;
+      }
+      
+      /* Optional: Inner background to hide the center of the gradient if the input was transparent */
+      .laser-input-wrapper::after {
+        content: '';
+        position: absolute;
+        inset: 2px;
+        background: #050a14;
+        border-radius: 18px;
+        z-index: 0;
+      }
+
+      @keyframes rotate-border {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+
+      /* --- Universe Input Style (Curvy Earwig Adaptation) --- */
+      .input-universe {
+        position: relative;
+        z-index: 1; /* Above the laser background */
+        border: none;
+        outline: none;
+        width: 100%;
+        height: 100%;
+        border-radius: 18px; /* Inner Radius */
+        background: #050a14;
+        box-shadow: inset 4px 4px 10px #020408,
+                    inset -4px -4px 10px #0a1428;
+        color: white;
+        transition: 0.3s ease;
+        font-family: 'JetBrains Mono', monospace;
+        letter-spacing: 0.05em;
+      }
+      
+      .input-universe:focus {
+        background: #0a1428;
+        box-shadow: 
+            inset 0 0 15px rgba(188, 19, 254, 0.1);
+      }
+      
+      .input-universe::placeholder {
+        color: #4b5563;
+      }
+
+      /* Tech Borders */
+      .tech-border-corner {
+        position: relative;
+        clip-path: polygon(
+          0 0, 
+          100% 0, 
+          100% calc(100% - 15px), 
+          calc(100% - 15px) 100%, 
+          0 100%
+        );
+      }
+      
+      /* Holographic Grid Background */
+      .holo-grid {
+        background-size: 40px 40px;
+        background-image:
+          linear-gradient(to right, rgba(0, 243, 255, 0.05) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(0, 243, 255, 0.05) 1px, transparent 1px);
+        mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
+      }
+      
+      /* Markdown Styles */
+      .probotics-markdown p { margin-bottom: 0.75rem; }
+      .probotics-markdown p:last-child { margin-bottom: 0; }
+      .probotics-markdown code { 
+        font-family: 'JetBrains Mono', monospace; 
+        font-size: 0.85em;
+        background: rgba(0,0,0,0.3);
+        padding: 0.1rem 0.3rem;
+        border-radius: 0.25rem;
+        color: #ff00ff;
+      }
+      .probotics-markdown pre {
+        background: rgba(0,0,0,0.5);
+        border: 1px solid rgba(255,255,255,0.1);
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        margin-bottom: 0.75rem;
+      }
+      .probotics-markdown pre code {
+        background: transparent;
+        padding: 0;
+        color: #a5b4fc;
+        border-radius: 0;
+      }
+      .probotics-markdown strong { color: #00f3ff; font-weight: 600; }
+      .probotics-markdown ul { list-style-type: disc; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+      .probotics-markdown ol { list-style-type: decimal; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+      .probotics-markdown h1, .probotics-markdown h2, .probotics-markdown h3 {
+        font-family: 'Orbitron', sans-serif;
+        color: #e0e0e0;
+        margin-top: 1rem;
+        margin-bottom: 0.5rem;
+        font-weight: bold;
+      }
+      .probotics-markdown h1 { font-size: 1.25rem; border-bottom: 1px solid rgba(0,243,255,0.3); padding-bottom: 0.25rem; }
+      .probotics-markdown h2 { font-size: 1.1rem; }
+      .probotics-markdown blockquote {
+        border-left: 3px solid #bc13fe;
+        padding-left: 1rem;
+        font-style: italic;
+        color: #9ca3af;
+        margin-bottom: 0.75rem;
+      }
+      .probotics-markdown table { width: 100%; border-collapse: collapse; margin-bottom: 0.75rem; font-size: 0.9em; }
+      .probotics-markdown th { text-align: left; border-bottom: 1px solid rgba(0,243,255,0.3); padding: 0.5rem; color: #00f3ff; font-family: 'Orbitron', sans-serif; }
+      .probotics-markdown td { border-bottom: 1px solid rgba(255,255,255,0.05); padding: 0.5rem; }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.33.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.1/",
+    "react/": "https://esm.sh/react@^19.2.1/",
+    "react": "https://esm.sh/react@^19.2.1",
+    "react-markdown": "https://esm.sh/react-markdown@9.0.1?bundle",
+    "remark-gfm": "https://esm.sh/remark-gfm@4.0.0?bundle"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

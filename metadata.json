@@ -1,0 +1,9 @@
+{
+  "name": "PROBOTICS",
+  "description": "A universal, futuristic conversational agent with multimodal capabilities, persistent memory, and tool integration.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ]
+}
