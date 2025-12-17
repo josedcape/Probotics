@@ -8,11 +8,9 @@
 
 Bienvenido a **PROBOTICS**, una aplicación de asistencia conversacional de vanguardia diseñada con una estética Cyberpunk inmersiva. Esta interfaz no solo procesa texto; ve, escucha, habla, recuerda y ejecuta acciones complejas a través de un ecosistema de módulos neuronales.
 
+![PROBOTICS Interface](probotics.png)
+
 ---
-<img width="2816" height="1536" alt="probotics" src="https://github.com/user-attachments/assets/b0fa2bcb-f031-4d61-83cb-2cd8050919af" />
-
-
-
 
 ## 🌟 Funcionalidades Principales
 

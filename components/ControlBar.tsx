@@ -56,20 +56,31 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
   const [expandedInfo, setExpandedInfo] = useState<string | null>(null);
   
   const recognitionRef = useRef<any>(null);
+  
+  // CORE VOICE REFS
+  const silenceTimerRef = useRef<any>(null);
+  const isSendingRef = useRef(false); 
+  const shouldKeepListening = useRef(false); // CRITICAL: Controls the infinite loop
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
   const agentsMenuRef = useRef<HTMLDivElement>(null);
-  const agentsButtonRef = useRef<HTMLButtonElement>(null); // Ref for the button
+  const agentsButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Keep track of latest props to avoid stale closures in long-running speech callbacks
+  // Keep track of latest props/state to avoid stale closures in callbacks
   const propsRef = useRef(props);
+  const inputTextRef = useRef(inputText); 
+  
   useEffect(() => {
     propsRef.current = props;
   }, [props]);
 
+  useEffect(() => {
+    inputTextRef.current = inputText;
+  }, [inputText]);
+
   // Click outside listener for Agents Menu
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      // Ignore clicks on the menu itself AND the trigger button
       if (
           agentsMenuRef.current && 
           !agentsMenuRef.current.contains(event.target as Node) &&
@@ -77,7 +88,7 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
           !agentsButtonRef.current.contains(event.target as Node)
       ) {
         setIsAgentsMenuOpen(false);
-        setExpandedInfo(null); // Collapse info when closing
+        setExpandedInfo(null);
       }
     };
     if (isAgentsMenuOpen) {
@@ -86,66 +97,206 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isAgentsMenuOpen]);
 
-  // --- VOICE INPUT LOGIC ---
-  const toggleVoiceInput = () => {
-    if (isListening) {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-      setIsListening(false);
-    } else {
+  // --- START RECOGNITION INSTANCE ---
+  const startRecognition = () => {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        alert("Voice recognition module not found in this browser environment.");
-        return;
+      if (!SpeechRecognition) return;
+
+      // Cleanup previous instance if exists to prevent leaks
+      if (recognitionRef.current) {
+          try { recognitionRef.current.abort(); } catch(e) {}
       }
 
       const recognition = new SpeechRecognition();
-      recognition.continuous = true;
+      recognition.continuous = true; 
       recognition.interimResults = true;
-      recognition.lang = 'es-ES'; // Configurado a español
+      recognition.lang = 'es-ES';
 
       recognition.onstart = () => {
         setIsListening(true);
       };
 
       recognition.onend = () => {
-        setIsListening(false);
+        // FIX: FREEZE PREVENTION & CONTINUOUS LOOP
+        // We use a timeout to break the synchronous loop. This prevents the browser from hanging.
+        if (shouldKeepListening.current) {
+            console.log("Voice loop: Restarting...");
+            setTimeout(() => {
+                // Check flag again in case user cancelled during timeout
+                if (shouldKeepListening.current) {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        // Ignore specific error if already started, otherwise log
+                        console.warn("Voice restart info:", e);
+                    }
+                }
+            }, 150); // 150ms delay is critical for performance/stability
+        } else {
+            setIsListening(false);
+            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        }
       };
 
       recognition.onerror = (event: any) => {
-        console.error("Speech recognition error", event.error);
-        setIsListening(false);
+        // console.error("Speech recognition error", event.error);
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            shouldKeepListening.current = false;
+            setIsListening(false);
+        }
+        // For 'no-speech' or 'network', the onend loop will handle the restart
       };
 
       recognition.onresult = (event: any) => {
-        let finalTranscript = '';
+        // FIX: INPUT CLEARING ISSUE
+        // If we are currently sending or just sent a message, IGNORE any incoming speech
+        // This prevents the "ghost text" from reappearing after clearing the input.
+        if (isSendingRef.current || propsRef.current.isLoading) {
+             if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+             return; 
+        }
 
+        // 1. Clear any pending auto-send timer immediately
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+        let finalChunk = '';
+        let hasFinal = false;
+        
+        // Loop specifically through the NEW results
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
+            finalChunk += event.results[i][0].transcript;
+            hasFinal = true;
           }
         }
 
-        if (finalTranscript) {
-           const lower = finalTranscript.toLowerCase().trim();
-           
-           // Comandos de voz en Español
-           if (lower.includes('enviar mensaje') || (lower === 'enviar')) {
-               const textToSend = inputText + (inputText ? ' ' : '') + finalTranscript.replace(/enviar( mensaje)?/gi, '');
-               if (textToSend.trim()) {
-                   propsRef.current.onSendMessage(textToSend.trim(), attachments);
-                   setInputText('');
-                   setAttachments([]);
-               }
-           } else {
-               setInputText(prev => prev + (prev ? ' ' : '') + finalTranscript);
-           }
+        const trimmedChunk = finalChunk.trim();
+
+        if (hasFinal && trimmedChunk) {
+            // 2. Process Commands (Voice)
+            const executed = processDynamicCommands(trimmedChunk, 'voice');
+
+            if (!executed) {
+                // 3. Append text to input state
+                setInputText(prev => {
+                    if (isSendingRef.current) return ''; 
+                    
+                    if (prev.endsWith(trimmedChunk)) return prev;
+                    const separator = prev.length > 0 ? ' ' : '';
+                    return prev + separator + trimmedChunk;
+                });
+            }
         }
+
+        // 4. Set NEW Silence Timer (The "Auto-Send" Logic)
+        silenceTimerRef.current = setTimeout(() => {
+            triggerAutoSend();
+        }, 2000); 
       };
 
       recognitionRef.current = recognition;
-      recognition.start();
+      try {
+          recognition.start();
+      } catch (e) {
+          console.error("Start error", e);
+      }
+  };
+
+  // --- DYNAMIC COMMAND PROCESSOR ---
+  const processDynamicCommands = (input: string, source: 'text' | 'voice'): boolean => {
+      const command = input.toLowerCase().trim().replace(/[.,!]/g, '');
+      const currentProps = propsRef.current;
+
+      // COMANDO 1: "iniciar" -> Activa reconocimiento de voz CONTINUO (Solo Texto)
+      // This command forces the loop to stay open.
+      if (source === 'text' && (command === 'iniciar' || command === 'activar voz' || command === 'modo continuo')) {
+          console.log("Comando 'iniciar' recibido. Activando Modo Continuo.");
+          shouldKeepListening.current = true; // FORCE CONTINUOUS
+          if (!isListening) {
+              startRecognition();
+          }
+          return true;
+      }
+
+      // COMANDO 2: "cámara"
+      if (['cámara', 'camara', 'activar cámara', 'prender cámara'].includes(command)) {
+          if (!currentProps.isCameraActive) currentProps.onToggleCamera();
+          return true; 
+      }
+
+      // Comandos Adicionales
+      if (['apagar cámara', 'detener cámara'].includes(command)) {
+          if (currentProps.isCameraActive) currentProps.onToggleCamera();
+          return true;
+      }
+
+      if (['pantalla', 'compartir pantalla'].includes(command)) {
+          if (!currentProps.isScreenShareActive) currentProps.onToggleScreenShare();
+          return true;
+      }
+      
+      if (['terminal', 'abrir terminal'].includes(command)) {
+          if (!currentProps.isTerminalOpen) currentProps.onToggleTerminal();
+          return true;
+      }
+
+      // Explicit Send Command (Voice override)
+      if (command === 'enviar' || command === 'enviar mensaje') {
+          triggerAutoSend();
+          return true;
+      }
+
+      return false;
+  };
+
+  // --- TRIGGER AUTO SEND LOGIC (ROBUST) ---
+  const triggerAutoSend = () => {
+      // 1. Safety Lock: Prevent double firing OR firing while loading
+      // isLoading check prevents piling up requests that crash memory
+      if (isSendingRef.current || propsRef.current.isLoading) {
+          return;
+      }
+      
+      const textToSend = inputTextRef.current.trim();
+      
+      // 2. Prevent sending empty messages
+      if (!textToSend && attachments.length === 0) return;
+
+      isSendingRef.current = true;
+      
+      // 3. Execute Send
+      propsRef.current.onSendMessage(textToSend, attachments);
+      
+      // 4. Atomic Cleanup (Strictly clear inputs)
+      setInputText('');
+      setAttachments([]);
+      
+      // 5. Unlock after a safe delay to prevent "echo" from lingering speech buffers
+      setTimeout(() => {
+          isSendingRef.current = false;
+      }, 800); 
+  };
+
+  // --- MAIN TOGGLE HANDLER ---
+  const toggleVoiceInput = () => {
+    if (isListening) {
+      // User explicitly stops (Manual Toggle OFF)
+      shouldKeepListening.current = false;
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      setIsListening(false);
+    } else {
+      // User explicitly starts (Manual Toggle ON)
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        alert("Voice recognition module not found in this browser environment.");
+        return;
+      }
+      
+      shouldKeepListening.current = true;
+      startRecognition();
     }
   };
 
@@ -157,10 +308,26 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
   };
 
   const handleSend = () => {
-    if (!inputText.trim() && attachments.length === 0) return;
+    if ((!inputText.trim() && attachments.length === 0) || isLoading) return;
+    
+    // Lock voice input briefly to prevent race conditions during manual send
+    isSendingRef.current = true;
+
+    // Check text commands first
+    const executed = processDynamicCommands(inputText, 'text');
+    if (executed) {
+        setInputText('');
+        setTimeout(() => isSendingRef.current = false, 500);
+        return;
+    }
+
     onSendMessage(inputText, attachments);
     setInputText('');
     setAttachments([]);
+    
+    setTimeout(() => {
+        isSendingRef.current = false;
+    }, 500);
   };
 
   const handleEnhance = async () => {
@@ -204,7 +371,6 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Agent Toggle Helper
   const toggleModule = (moduleKey: string) => {
       if (config && onConfigChange) {
           onConfigChange({
@@ -219,7 +385,6 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
 
   const hasText = inputText.trim().length > 0;
 
-  // Translated Modules List with Descriptions
   const modulesList = [
       { key: 'imageGen', label: 'Imagen IA', icon: '🖼️', description: 'Genera imágenes artísticas usando Imagen-3/Gemini.' },
       { key: 'ssh', label: 'Terminal SSH AURA', icon: '💻', description: 'Simula una terminal remota para ejecutar comandos.' },
@@ -255,7 +420,7 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
         </div>
       )}
 
-      {/* Agents Menu (Popup) - FIXED: Removed animate-scan and adjusted positioning */}
+      {/* Agents Menu (Popup) */}
       {isAgentsMenuOpen && config && (
           <div 
              ref={agentsMenuRef} 
@@ -278,7 +443,6 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
                               </div>
                               
                               <div className="flex items-center gap-2">
-                                  {/* INFO BUTTON */}
                                   <button 
                                      onClick={(e) => {
                                          e.stopPropagation();
@@ -289,8 +453,6 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
                                   >
                                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                                   </button>
-
-                                  {/* TOGGLE */}
                                   <div 
                                       onClick={() => toggleModule(mod.key)}
                                       className={`w-8 h-4 rounded-full relative transition-colors cursor-pointer ${config.activeModules[mod.key as keyof typeof config.activeModules] ? 'bg-neon-cyan/50' : 'bg-gray-700'}`}
@@ -299,8 +461,6 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
                                   </div>
                               </div>
                           </div>
-                          
-                          {/* EXPANDED DESCRIPTION */}
                           {expandedInfo === mod.key && (
                               <div className="mx-2 mb-2 p-2 bg-black/40 border-l-2 border-neon-cyan/30 text-[10px] text-gray-400 font-mono animate-scan">
                                   {mod.description}
@@ -353,13 +513,7 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
             >
                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
             </button>
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              onChange={handleFileUpload} 
-              className="hidden" 
-              multiple 
-            />
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" multiple />
          </div>
 
          {/* Input Block (Center) */}
@@ -368,20 +522,14 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={isListening ? "Escuchando... (Dí 'enviar' para mandar)" : "Escribe o usa comandos de voz..."}
+                placeholder={isListening ? "Escuchando... (Haz silencio para enviar)" : "Escribe o usa comandos ('cámara')..."}
                 className="input-universe w-full h-12 py-3 pl-4 pr-10 resize-none overflow-hidden"
                 style={{ lineHeight: '1.5' }}
              />
-             
-             {/* ENHANCE PROMPT BUTTON - ALWAYS VISIBLE (Disabled state if empty) */}
              <button 
                 onClick={handleEnhance}
                 disabled={!hasText || isEnhancing}
-                className={`absolute top-1/2 -translate-y-1/2 right-2 p-1.5 rounded-full transition-all z-10 ${
-                    hasText 
-                        ? 'text-neon-purple hover:bg-neon-purple/20 hover:scale-110 hover:shadow-[0_0_10px_rgba(188,19,254,0.4)]' 
-                        : 'text-gray-600 cursor-not-allowed opacity-50'
-                }`}
+                className={`absolute top-1/2 -translate-y-1/2 right-2 p-1.5 rounded-full transition-all z-10 ${hasText ? 'text-neon-purple hover:bg-neon-purple/20 hover:scale-110 hover:shadow-[0_0_10px_rgba(188,19,254,0.4)]' : 'text-gray-600 cursor-not-allowed opacity-50'}`}
                 title="Enhance Prompt (AI)"
              >
                  {isEnhancing ? (
@@ -394,8 +542,6 @@ const ControlBar: React.FC<ControlBarProps> = (props) => {
 
          {/* Actions Block (Right) */}
          <div className="flex items-center gap-1 md:gap-2 shrink-0">
-             
-            {/* AGENTS MENU TRIGGER */}
             <button 
                 ref={agentsButtonRef}
                 onClick={() => setIsAgentsMenuOpen(!isAgentsMenuOpen)}

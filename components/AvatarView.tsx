@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 interface AvatarViewProps {
   isCameraActive: boolean;
@@ -24,24 +24,58 @@ const AvatarView: React.FC<AvatarViewProps> = ({
   const screenRef = useRef<HTMLVideoElement>(null);
   const customVideoRef = useRef<HTMLVideoElement>(null);
 
-  // Handle Camera Stream
-  useEffect(() => {
-    let stream: MediaStream | null = null;
+  // --- CAMERA STATE ---
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+  const [zoom, setZoom] = useState<number>(1);
+  const [zoomRange, setZoomRange] = useState<{min: number, max: number} | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
+  // --- CAMERA LOGIC ---
+  useEffect(() => {
     const startCamera = async () => {
       if (isCameraActive && videoRef.current) {
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          // Stop previous stream if exists
+          if (streamRef.current) {
+             streamRef.current.getTracks().forEach(track => track.stop());
+          }
+
+          const constraints: MediaStreamConstraints = { 
+            video: { 
+                facingMode: facingMode,
+                // Request ideal resolution (HD) but allow fallback
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+                // Request zoom capability
+                zoom: true 
+            } as any 
+          };
+
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          streamRef.current = stream;
           videoRef.current.srcObject = stream;
+
+          // Check Hardware Capabilities (Zoom)
+          const track = stream.getVideoTracks()[0];
+          const capabilities = (track.getCapabilities && track.getCapabilities()) as any;
+          
+          if (capabilities && capabilities.zoom) {
+              setZoomRange({ min: capabilities.zoom.min, max: capabilities.zoom.max });
+              setZoom(capabilities.zoom.min); // Reset zoom on camera switch
+          } else {
+              setZoomRange(null);
+          }
+
         } catch (err) {
-          console.error("Camera access denied:", err);
+          console.error("Camera access denied or error:", err);
         }
       }
     };
 
     const stopCamera = () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
       }
       if (videoRef.current) {
         videoRef.current.srcObject = null;
@@ -55,9 +89,32 @@ const AvatarView: React.FC<AvatarViewProps> = ({
     }
 
     return () => stopCamera();
-  }, [isCameraActive]);
+  }, [isCameraActive, facingMode]);
 
-  // Handle Screen Share Stream
+  // Handle Zoom Change
+  const handleZoomChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newZoom = parseFloat(e.target.value);
+      setZoom(newZoom);
+
+      if (streamRef.current) {
+          const track = streamRef.current.getVideoTracks()[0];
+          if (track && track.applyConstraints) {
+              try {
+                  await track.applyConstraints({
+                      advanced: [{ zoom: newZoom } as any]
+                  });
+              } catch (error) {
+                  console.warn("Zoom not supported directly on track:", error);
+              }
+          }
+      }
+  };
+
+  const toggleCameraFlip = () => {
+      setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
+  };
+
+  // --- SCREEN SHARE LOGIC ---
   useEffect(() => {
       if (isScreenShareActive && screenStream && screenRef.current) {
           screenRef.current.srcObject = screenStream;
@@ -66,35 +123,24 @@ const AvatarView: React.FC<AvatarViewProps> = ({
       }
   }, [isScreenShareActive, screenStream]);
 
-  // Handle Custom Avatar Video Playback (SYNC LOGIC)
+  // --- AVATAR SYNC LOGIC ---
   useEffect(() => {
     const vid = customVideoRef.current;
-    
-    // Safety check: if we switched to camera or screen, do nothing
     if (!vid || !customAvatarVideo || isCameraActive || isScreenShareActive) return;
 
     const syncVideo = async () => {
         try {
             if (isSpeaking) {
-                // Si debe hablar y está pausado, reproducir.
-                if (vid.paused) {
-                    await vid.play();
-                }
+                if (vid.paused) await vid.play();
             } else {
-                // Si no debe hablar, pausar y resetear al frame neutral (0).
-                if (!vid.paused) {
-                    vid.pause();
-                }
-                // Forzamos el regreso al inicio para que la boca se cierre (asumiendo que frame 0 es neutral)
+                if (!vid.paused) vid.pause();
                 vid.currentTime = 0;
             }
         } catch (e) {
             console.warn("Avatar video sync interrupted:", e);
         }
     };
-
     syncVideo();
-
   }, [isSpeaking, customAvatarVideo, isCameraActive, isScreenShareActive]);
 
   return (
@@ -116,14 +162,52 @@ const AvatarView: React.FC<AvatarViewProps> = ({
 
       {/* Camera Feed - Priority 1 */}
       {isCameraActive && (
-        <video
-          id="camera-feed"
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="absolute inset-0 w-full h-full object-cover z-10 opacity-80 mix-blend-screen"
-        />
+        <>
+            <video
+            id="camera-feed"
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 w-full h-full object-cover z-10"
+            />
+            
+            {/* --- CAMERA CONTROLS OVERLAY --- */}
+            <div className="absolute inset-0 z-20 pointer-events-none flex flex-col justify-between p-4 md:p-8">
+                {/* Top Right: Flip Camera */}
+                <div className="flex justify-end pointer-events-auto">
+                    <button 
+                        onClick={toggleCameraFlip}
+                        className="bg-black/60 border border-neon-cyan/50 text-neon-cyan p-3 rounded-full hover:bg-neon-cyan hover:text-black transition-all shadow-[0_0_20px_rgba(0,243,255,0.3)] backdrop-blur-md"
+                        title="Cambiar Cámara (Frontal/Trasera)"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0-6-8-6-8-6s-8 0-8 6h16z"></path><path d="M4 14c0 6 8 6 8 6s8 0 8-6H4z"></path><path d="M12 10v4"></path></svg>
+                    </button>
+                </div>
+
+                {/* Bottom Center: Zoom Slider (Only if supported) */}
+                {zoomRange && (
+                    <div className="flex justify-center pointer-events-auto mb-16 md:mb-0">
+                         <div className="bg-black/60 border border-neon-cyan/30 rounded-full px-6 py-2 backdrop-blur-md flex items-center gap-4 w-[80%] max-w-sm">
+                             <span className="text-[10px] font-mono text-neon-cyan">1x</span>
+                             <input 
+                                type="range" 
+                                min={zoomRange.min} 
+                                max={zoomRange.max} 
+                                step="0.1" 
+                                value={zoom} 
+                                onChange={handleZoomChange}
+                                className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-neon-cyan"
+                             />
+                             <span className="text-[10px] font-mono text-neon-cyan">{zoomRange.max}x</span>
+                         </div>
+                    </div>
+                )}
+            </div>
+            
+            {/* Scanline Effect for Camera */}
+            <div className="absolute inset-0 z-10 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] opacity-20"></div>
+        </>
       )}
 
       {/* Screen Share Feed - Priority 2 */}
@@ -165,7 +249,7 @@ const AvatarView: React.FC<AvatarViewProps> = ({
         </div>
       )}
 
-      {/* AI Visualizer (The Orb) - Only show if NO camera, NO screen, and NO custom avatar */}
+      {/* AI Visualizer (The Orb) */}
       {!isCameraActive && !isScreenShareActive && !customAvatarVideo && (
         <div 
           className="relative z-20 flex flex-col items-center justify-center pointer-events-none animate-float transition-transform duration-300"
@@ -186,7 +270,7 @@ const AvatarView: React.FC<AvatarViewProps> = ({
         </div>
       )}
 
-      {/* Status Text Overlay (Always visible on top of everything) */}
+      {/* Status Text Overlay */}
       <div className="absolute z-20 mt-12 flex flex-col items-center gap-2 top-1/2 pt-20 pointer-events-none">
           {!customAvatarVideo && !isCameraActive && !isScreenShareActive && (
               <div className={`font-display tracking-[0.3em] text-sm uppercase ${isLoading ? 'text-neon-pink animate-pulse' : 'text-neon-cyan'}`}>

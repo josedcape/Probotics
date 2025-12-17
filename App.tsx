@@ -247,39 +247,46 @@ const App: React.FC = () => {
       const selector = isScreenShareActive ? '#screen-feed' : '#camera-feed';
       const videoElement = document.querySelector(selector) as HTMLVideoElement;
       
-      if (videoElement && videoElement.readyState >= 2) { // HAVE_CURRENT_DATA
+      // Strict check to ensure video is ready
+      if (!videoElement || videoElement.readyState < 2) { 
+        console.warn("Frame capture skipped: Video not ready");
+        return null;
+      }
         
-        // PERFORMANCE FIX: Downscale large inputs
-        // Screen shares can be 4K+. Sending full res freezes the UI and API.
-        const MAX_WIDTH = 1024;
-        let width = videoElement.videoWidth;
-        let height = videoElement.videoHeight;
+      // PERFORMANCE FIX: Significantly reduce resolution for AI analysis
+      // This prevents the "Black Screen / Freeze" issue caused by memory overload
+      const MAX_WIDTH = 800; 
+      let width = videoElement.videoWidth;
+      let height = videoElement.videoHeight;
 
-        if (width > MAX_WIDTH) {
-            const scale = MAX_WIDTH / width;
-            width = MAX_WIDTH;
-            height = height * scale;
-        }
+      if (width > MAX_WIDTH) {
+          const scale = MAX_WIDTH / width;
+          width = MAX_WIDTH;
+          height = height * scale;
+      }
 
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency
+      
+      if (ctx) {
+        // Draw image scaled
+        ctx.drawImage(videoElement, 0, 0, width, height);
         
-        if (ctx) {
-          // Draw image scaled
-          ctx.drawImage(videoElement, 0, 0, width, height);
-          
-          // Use slightly lower quality (0.7) to speed up Base64 generation and upload
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-          
-          return {
-            name: isScreenShareActive ? 'screen_capture.jpg' : 'camera_snapshot.jpg',
-            mimeType: 'image/jpeg',
-            data: dataUrl,
-            isText: false
-          };
-        }
+        // Use lower quality (0.6) to speed up Base64 generation and upload
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        
+        // Explicitly clear canvas to help Garbage Collector
+        canvas.width = 0;
+        canvas.height = 0;
+        
+        return {
+          name: isScreenShareActive ? 'screen_capture.jpg' : 'camera_snapshot.jpg',
+          mimeType: 'image/jpeg',
+          data: dataUrl,
+          isText: false
+        };
       }
     } catch (e) {
       console.error("Frame capture failed:", e);
@@ -329,8 +336,6 @@ const App: React.FC = () => {
       const botAttachments = response.generatedAttachments || [];
 
       // --- 3D MODEL HANDLER ---
-      // Si la respuesta incluye un modelo 3D (toolResult), lo convertimos en un HTML ejecutable
-      // y lo añadimos como adjunto para que el CanvasPanel lo renderice.
       if (response.toolResult?.type === '3d_model') {
           const threeCode = response.toolResult.data.code;
           const htmlWrapper = `
@@ -426,9 +431,7 @@ const App: React.FC = () => {
       setMessages(prev => [...prev, botMsg]);
 
       // --- CANVAS INTEGRATION LOGIC ---
-      // Automatically send generated content (Images, HTML, 3D Models) to the Canvas Panel
       if (botAttachments.length > 0) {
-          // Buscamos preferiblemente el modelo 3d o una imagen generada
           const contentToShow = botAttachments.find(att => att.name.includes('3d_model') || att.mimeType.startsWith('image/')) || botAttachments[0];
           setCanvasContent(contentToShow);
           setIsCanvasOpen(true);
@@ -469,8 +472,6 @@ const App: React.FC = () => {
 
   // Helper para reabrir canvas desde Chat
   const handleViewAttachment = (att: Attachment) => {
-      // Si es un modelo 3D viejo sin wrapper, no lo abrimos en canvas directamente (fallback)
-      // Pero el nuevo sistema genera wrapper.
       setCanvasContent(att);
       setIsCanvasOpen(true);
   };
